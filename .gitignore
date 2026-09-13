@@ -1,0 +1,12 @@
+# course material — not part of portfolio repo
+course/
+
+# python
+.venv/
+__pycache__/
+*.pyc
+
+# env/secrets
+.env
+*.pem
+
