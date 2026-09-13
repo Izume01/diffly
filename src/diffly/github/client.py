@@ -62,7 +62,7 @@ async def get_installation_token(installation_id: int) -> str:
         "X-GitHub-Api-Version": GITHUB_API_VERSION,
     }
 
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=15.0) as client:
         response = await client.post(url, headers=headers)
         response.raise_for_status()
         data: dict[str, Any] = response.json()
@@ -82,7 +82,7 @@ async def get_pr_diff(repo: str, pull_number: int, installation_token: str) -> s
         "X-GitHub-Api-Version": GITHUB_API_VERSION,
     }
 
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=15.0) as client:
         response = await client.get(url, headers=headers)
         response.raise_for_status()
         return response.text
@@ -107,7 +107,7 @@ async def post_pr_comment(
 
     payload = {"body": body}
 
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=15.0) as client:
         response = await client.post(url, headers=headers, json=payload)
         response.raise_for_status()
         return response.json()

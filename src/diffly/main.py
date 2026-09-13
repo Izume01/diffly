@@ -57,19 +57,37 @@ async def github_webhook(
     if not acquired:
         return {"status": "duplicate_ignored"}
 
-    await request.app.state.arq_pool.enqueue_job(
-        "review_pr",
-        {
-            "event": x_github_event,
-            "delivery": x_github_delivery,
-            "action": action,
-        },
-        _job_id=f"github:delivery:{x_github_delivery}",
+    if x_github_event == "pull_request" and action in (
+        "opened",
+        "synchronize",
+        "reopened",
+    ):
+        installation_id = data.get("installation", {}).get("id")
+        repo = data.get("repository", {}).get("full_name")
+        pull_number = data.get("pull_request", {}).get("number")
+
+        await request.app.state.arq_pool.enqueue_job(
+            "review_pr",
+            {
+                "event": x_github_event,
+                "delivery": x_github_delivery,
+                "action": action,
+                "repo": repo,
+                "pull_number": pull_number,
+                "installation_id": installation_id,
+            },
+            _job_id=f"github:delivery:{x_github_delivery}",
+        )
+
+        print(
+            f"Queued PR #{pull_number} on {repo} (action={action}, delivery={x_github_delivery})"
+        )
+        return {"status": "queued", "delivery": x_github_delivery}
+
+    print(
+        f"Ignored event={x_github_event} action={action} delivery={x_github_delivery}"
     )
-
-    print(f"GitHub event={x_github_event} delivery={x_github_delivery} action={action}")
-
-    return {"status": "queued (fake for now)"}
+    return {"status": "ignored", "event": x_github_event, "action": action}
 
 
 @app.get("/health")
