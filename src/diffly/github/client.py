@@ -243,7 +243,7 @@ async def add_pr_reaction(
     repo: str,
     pull_number: int,
     installation_token: str,
-    reaction: str = "eyes",
+    reaction: str = "rocket",
 ) -> dict[str, Any]:
     """
     Add an emoji reaction (e.g. 'eyes', '+1', 'rocket') to the PR description.

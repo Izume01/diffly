@@ -40,10 +40,10 @@ async def review_pr(ctx: dict[str, Any], job_data: dict[str, Any]) -> dict[str, 
 
     token = await get_installation_token(installation_id)
 
-    # 0. Instantly react with 👀 for zero-notification visual acknowledgement
+    # 0. Instantly react with 🚀 for zero-notification visual acknowledgement
     try:
-        await add_pr_reaction(repo, pull_number, token, reaction="eyes")
-        print(f"👀 Added eyes reaction to {repo} PR #{pull_number}")
+        await add_pr_reaction(repo, pull_number, token, reaction="rocket")
+        print(f"🚀 Added rocket reaction to {repo} PR #{pull_number}")
     except Exception as e:  # noqa: BLE001
         print(f"⚠️ Failed to add reaction: {e}")
 
