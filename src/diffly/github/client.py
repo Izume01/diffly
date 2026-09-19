@@ -114,11 +114,12 @@ async def post_pr_comment(
         response.raise_for_status()
         return response.json()
 
+
 async def create_check_run(
     repo: str,
     installation_token: str,
     head_sha: str,
-    name: str,
+    name: str = "Diffly Code Review",
     status: str = "in_progress",
     conclusion: str | None = None,
     output: dict[str, Any] | None = None,
@@ -142,11 +143,12 @@ async def create_check_run(
         payload["conclusion"] = conclusion
     if output is not None:
         payload["output"] = output
-            
+
     async with httpx.AsyncClient(timeout=15.0) as client:
         response = await client.post(url, headers=headers, json=payload)
         response.raise_for_status()
         return response.json()
+
 
 async def update_check_run(
     repo: str,
@@ -224,13 +226,37 @@ def format_review_comment(finding: ReviewSchema) -> str:
             lines = clean_code.splitlines()
             clean_code = "\n".join(lines[1:-1]).strip()
 
-        parts.extend([
-            "",
-            "#### Suggested Fix",
-            "```suggestion",
-            clean_code,
-            "```",
-        ])
+        parts.extend(
+            [
+                "",
+                "#### Suggested Fix",
+                "```suggestion",
+                clean_code,
+                "```",
+            ]
+        )
 
     return "\n".join(parts)
 
+
+async def add_pr_reaction(
+    repo: str,
+    pull_number: int,
+    installation_token: str,
+    reaction: str = "eyes",
+) -> dict[str, Any]:
+    """
+    Add an emoji reaction (e.g. 'eyes', '+1', 'rocket') to the PR description.
+    Provides instant, zero-notification visual feedback that Diffly is actively reviewing.
+    """
+    url = f"{GITHUB_API_BASE}/repos/{repo}/issues/{pull_number}/reactions"
+    headers = {
+        "Authorization": f"Bearer {installation_token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": GITHUB_API_VERSION,
+    }
+    payload = {"content": reaction}
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        response = await client.post(url, headers=headers, json=payload)
+        response.raise_for_status()
+        return response.json()

@@ -1,10 +1,16 @@
 import asyncio
-from typing import Any
+import json
 
-from diffly.agents.specialist import logic_agent, performance_agent, security_agent
+from diffly.agents.schema import AgentReviewResult
+from diffly.agents.specialist import (
+    aggregator_agent,
+    logic_agent,
+    performance_agent,
+    security_agent,
+)
 
 
-async def run_pipeline(diff: str) -> list[Any]:
+async def run_pipeline(diff: str) -> AgentReviewResult:
     """Runs specialized reviewer agents over the PR diff with error resilience and pacing."""
     specialists = [
         ("Security", security_agent),
@@ -19,16 +25,41 @@ async def run_pipeline(diff: str) -> list[Any]:
             try:
                 res = await agent.run(diff)
                 results.append(res)
-                print(f"✅ {name} Agent completed ({len(res.output.finding)} findings).")
+                print(f"{name} Agent completed ({len(res.output.finding)} findings).")
                 break
             except Exception as e:  # noqa: BLE001
                 if attempt == 0:
-                    print(f"🔄 {name} Agent encountered transient error ({e}), retrying in 2s...")
+                    print(
+                        f"{name} Agent encountered transient error ({e}), retrying in 2s..."
+                    )
                     await asyncio.sleep(2.0)
                 else:
-                    print(f"⚠️ {name} Agent failed after retry: {e}")
+                    print(f"{name} Agent failed after retry: {e}")
 
-        # Pace calls by 1s to prevent router queue congestion
         await asyncio.sleep(1.0)
 
-    return results
+    all_findings = [
+        finding.model_dump() for res in results for finding in res.output.findings
+    ]
+
+    if not all_findings:
+        return AgentReviewResult(
+            summary="No issues found across Security, Logic, or Performance.",
+            findings=[],
+        )
+
+    prompt = (
+        "Here are the raw findings from the specialist reviewer agents:\n\n"
+        f"{json.dumps(all_findings, indent=2)}\n\n"
+        "Deduplicate overlapping findings on the same lines, filter low-confidence "
+        "items, "
+        "and synthesize an executive PR summary."
+    )
+
+    print("📊 Running Aggregator Agent...")
+    aggregator_run = await aggregator_agent.run(prompt)
+    print(
+        f"✅ Aggregator Agent completed ({len(aggregator_run.output.findings)} deduplicated findings)."
+    )
+
+    return aggregator_run.output

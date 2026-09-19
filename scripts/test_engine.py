@@ -21,23 +21,20 @@ async def main() -> None:
     print(f"   Diff size: {len(diff)} characters\n")
 
     print("🤖 Running Multi-Agent Pipeline with updated prompts...")
-    results = await run_pipeline(diff)
+    review = await run_pipeline(diff)
 
     print("\n" + "=" * 60)
-    print("REVIEW RESULTS PREVIEW (CALM / NON-CRINGE FORMAT)")
+    print("DEDUPLICATED AGGREGATOR REVIEW PREVIEW")
     print("=" * 60)
 
-    total_findings = 0
-    for res in results:
-        print(f"\n--- Specialist Overview: {res.output.summary} ---")
-        for finding in res.output.finding:
-            total_findings += 1
-            print(f"\n[File: {finding.file_path} | Line: {finding.line_number}]")
-            print("-" * 50)
-            print(format_review_comment(finding))
-            print("-" * 50)
+    print(f"\n--- Executive Summary: {review.summary} ---")
+    for finding in review.findings:
+        print(f"\n[File: {finding.file_path} | Line: {finding.line_number}]")
+        print("-" * 50)
+        print(format_review_comment(finding))
+        print("-" * 50)
 
-    print(f"\n✅ Completed: Total findings across specialists: {total_findings}")
+    print(f"\n✅ Completed: Total deduplicated findings: {len(review.findings)}")
 
 
 if __name__ == "__main__":

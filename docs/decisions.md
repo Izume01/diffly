@@ -15,6 +15,7 @@ This document tracks major engineering, infrastructure, and technical decisions 
 - [ADR-0007: Distributed Scaling, Multi-Tenancy & Resilience Strategy](#adr-0007-distributed-scaling-multi-tenancy--resilience-strategy)
 - [ADR-0008: Context Augmentation & Multi-Level Codebase Awareness](#adr-0008-context-augmentation--multi-level-codebase-awareness)
 - [ADR-0009: Prompt Injection Defense & False-Positive Elimination (Precedents & Hard Exclusions)](#adr-0009-prompt-injection-defense--false-positive-elimination-precedents--hard-exclusions)
+- [ADR-0010: Fan-In Aggregator / Judge Agent & PR Review Reaction UX](#adr-0010-fan-in-aggregator--judge-agent--pr-review-reaction-ux)
 
 ---
 
@@ -276,4 +277,35 @@ Automated PR review models face two critical operational vulnerabilities:
 Adopt the **Defense-in-Depth Prompt Architecture**:
 - Store full reference specification in [`docs/prompts/claude_code_security_prompt.md`](file:///home/nyx/lab/diffly/docs/prompts/claude_code_security_prompt.md) and export `CLAUDE_SECURITY_REVIEW_PROMPT` in [`src/diffly/agents/prompts.py`](file:///home/nyx/lab/diffly/src/diffly/agents/prompts.py).
 - Upgrade active `SECURITY_PROMPT` to enforce `<untrusted_diff>` prompt injection defenses, hard exclusions, and precedents while maintaining JSON schema compatibility (`AgentReviewResult`).
+
+---
+
+## ADR-0010: Fan-In Aggregator / Judge Agent & PR Review Reaction UX
+
+- **Date:** 2026-09-20
+- **Status:** Accepted
+
+### Context
+Running independent specialized reviewer agents (Security, Logic, Performance) introduces two distinct operational challenges:
+1. **Finding Duplication & Competing Comments:** Multiple specialists often identify the same root-cause flaw on identical line numbers (e.g. both Security and Logic flagging SQL injection or token verification bypass). Posting raw findings produces duplicate review comments on GitHub.
+2. **Review Acknowledgment UX:** Full multi-agent reviews require 30–45s of LLM inference. Without immediate visual feedback, developers may believe the webhook failed or the bot is unresponsive. However, posting initial text comments creates notification spam.
+
+### Options Considered
+1. **Heuristic Deduplication (Code-Only)**: Deduplicate findings strictly by matching `file_path` and `line_number`.
+   - *Pros:* Zero token overhead.
+   - *Cons:* Misses semantic duplicates spanning adjacent lines; cannot synthesize an integrated executive PR summary.
+2. **Fan-In Aggregator / Judge Agent (LLM Synthesis)**:
+   - Collect raw findings across all specialists and serialize them to JSON.
+   - Short-circuit on 0 findings to avoid unnecessary token spend.
+   - Invoke an `aggregator_agent` with [`AGGREGATOR_PROMPT`](file:///home/nyx/lab/diffly/src/diffly/agents/prompts.py) to consolidate overlapping issues, filter low-confidence noise, and produce a unified review.
+3. **Acknowledgment UX:**
+   - Text comment: High noise, triggers email notifications.
+   - GitHub Check Run Spinner: Provides PR status, but no feedback on the top-level issue conversation.
+   - GitHub Reactions API (`👀`): Immediate, zero-noise emoji reaction on the PR description.
+
+### Decision
+Adopt the **Fan-In Aggregator Agent and Multi-Modal Acknowledgment UX**:
+- **Immediate Acknowledgment:** Call `add_pr_reaction(repo, pull_number, token, "eyes")` upon job ingestion, and initialize a GitHub Check Run (`status="in_progress"`).
+- **Aggregator Agent:** Run `aggregator_agent` over serialized specialist findings to produce a deduplicated, high-confidence `AgentReviewResult`.
+- **Atomic Review Submission:** Publish inline review comments with 1-click ````suggestion` blocks via GitHub Pull Request Reviews API, and complete the check run with the executive summary.
 

@@ -9,6 +9,7 @@ from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
 from diffly.agents.prompts import (
+    AGGREGATOR_PROMPT,
     LOGIC_PROMPT,
     PERFORMANCE_PROMPT,
     SECURITY_PROMPT,
@@ -80,5 +81,11 @@ logic_agent = Agent(
 performance_agent = Agent(
     model=model,
     system_prompt=PERFORMANCE_PROMPT,
+    output_type=AgentReviewResult,
+)
+
+aggregator_agent = Agent(
+    model=model,
+    system_prompt=AGGREGATOR_PROMPT,
     output_type=AgentReviewResult,
 )

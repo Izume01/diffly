@@ -65,6 +65,7 @@ async def github_webhook(
         installation_id = data.get("installation", {}).get("id")
         repo = data.get("repository", {}).get("full_name")
         pull_number = data.get("pull_request", {}).get("number")
+        head_sha = data.get("pull_request", {}).get("head", {}).get("sha")
 
         await request.app.state.arq_pool.enqueue_job(
             "review_pr",
@@ -74,6 +75,7 @@ async def github_webhook(
                 "action": action,
                 "repo": repo,
                 "pull_number": pull_number,
+                "head_sha": head_sha,
                 "installation_id": installation_id,
             },
             _job_id=f"github:delivery:{x_github_delivery}",

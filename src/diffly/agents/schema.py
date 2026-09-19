@@ -31,7 +31,9 @@ class AgentReviewResult(BaseModel):
     )
     findings: list[ReviewSchema] = Field(
         default_factory=list,
-        validation_alias=AliasChoices("findings", "finding", "vulnerabilities", "issues"),
+        validation_alias=AliasChoices(
+            "findings", "finding", "vulnerabilities", "issues"
+        ),
         description="List of review findings",
     )
 
