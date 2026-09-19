@@ -4,6 +4,7 @@ from typing import Any
 from arq.connections import RedisSettings
 from dotenv import load_dotenv
 
+from diffly.agents.pipeline import run_pipeline
 from diffly.github.client import get_installation_token, get_pr_diff
 
 load_dotenv()
@@ -33,8 +34,19 @@ async def review_pr(ctx: dict[str, Any], job_data: dict[str, Any]) -> dict[str, 
 
         print(f"📄 Full PR Diff retrieved ({len(diff)} characters):")
         print(diff)
+        print(
+            f"🤖 Invoking Multi-Agent Review Pipeline for {repo} PR #{pull_number}..."
+        )
+        review_results = await run_pipeline(diff)
 
-        # Next: Pass diff to AI reviewer agents
+        for r in review_results:
+            print(f"\n--- Specialist Summary: {r.output.summary} ---")
+            print(f"Findings count: {len(r.output.finding)}")
+            for f in r.output.finding:
+                print(f"🚨 [{f.severity.upper()}] Line {f.line_number}: {f.title}")
+                print(f"   Description: {f.description}")
+                if f.suggestion:
+                    print(f"   Suggestion: {f.suggestion}")
     else:
         print(
             f"⚠️ Missing PR review details in job payload (event={job_data.get('event')})"

@@ -13,6 +13,8 @@ dependencies = [
     "fastapi>=0.141.1",
     "httpx>=0.28.1",
     "pydantic>=2.13.5",
+    "pydantic-ai>=2.43.0",
+    "pydantic-ai-harness>=0.31.0",
     "pyjwt[crypto]>=2.14.0",
     "python-dotenv>=1.2.3",
     "sqlalchemy>=2.0.52",
@@ -33,3 +35,8 @@ dev = [
     "pytest>=9.1.1",
     "ruff>=0.16.7",
 ]
+
+[tool.basedpyright]
+typeCheckingMode = "standard"
+reportCallInDefaultInitializer = false
+reportUnusedCallResult = false
