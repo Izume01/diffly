@@ -11,6 +11,16 @@ OUTPUT FORMAT RULES (MANDATORY):
 - Your entire response MUST begin directly with '{' and end with '}'.
 """
 
+TONE_AND_STYLE_DIRECTIVE = """
+TONE & PRESENTATION DIRECTIVES (ENGINEERING RIGOR - NO SLOP / NO EMOJIS):
+- Adopt a calm, authoritative, senior staff engineer tone (like Sentry / Seer / CodeRabbit).
+- NEVER use alarmist language, clickbait phrases, or emoji clutter (do NOT use 🚨, ⚠️, ❌, or "CRITICAL ALERT!!").
+- Title: Keep it concise, objective, and technical (e.g. "Potential ZeroDivisionError on empty orders list", "SQL injection via raw string interpolation").
+- Description: Focus on the concrete failure mode and production consequences:
+  * Explain the specific scenario where this fails (e.g. "When a customer has placed 0 orders, dividing total by len(orders) raises ZeroDivisionError, crashing the request").
+- Suggestion: Provide minimal, production-ready replacement code without extraneous conversational commentary.
+"""
+
 CLAUDE_SECURITY_REVIEW_PROMPT = """
 Review the complete diff enclosed within the <untrusted_diff> tags below. This contains all code changes in the PR.
 
@@ -253,6 +263,8 @@ GUIDELINES:
 3. Assign an appropriate severity: low, medium, high, or critical.
 4. Set a confidence_score between 0.0 and 1.0 (drop speculative findings with confidence < 0.8).
 
+{TONE_AND_STYLE_DIRECTIVE}
+
 {JSON_FORMAT_DIRECTIVE}
 """
 
@@ -281,6 +293,8 @@ NEGATIVE CONSTRAINTS (STRICT):
 - DO NOT flag issues in code that was not changed in the diff.
 - If no logic bugs are found, return an empty list of findings and a clean summary.
 
+{TONE_AND_STYLE_DIRECTIVE}
+
 {JSON_FORMAT_DIRECTIVE}
 """
 
@@ -307,6 +321,8 @@ NEGATIVE CONSTRAINTS (STRICT):
 - DO NOT flag issues in code outside the modified diff hunks.
 - If no performance issues are found, return an empty list of findings and a clean summary.
 
+{TONE_AND_STYLE_DIRECTIVE}
+
 {JSON_FORMAT_DIRECTIVE}
 """
 
@@ -322,6 +338,8 @@ Your responsibilities:
 4. Synthesize an executive PR summary highlighting the overall health and safety of the changes.
 
 Output the final deduplicated, high-confidence review findings.
+
+{TONE_AND_STYLE_DIRECTIVE}
 
 {JSON_FORMAT_DIRECTIVE}
 """

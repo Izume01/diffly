@@ -7,6 +7,8 @@ import httpx
 import jwt
 from dotenv import load_dotenv
 
+from diffly.agents.schema import ReviewSchema
+
 load_dotenv()
 
 APP_ID = os.getenv("APP_ID") or os.getenv("GITHUB_APP_ID")
@@ -111,3 +113,124 @@ async def post_pr_comment(
         response = await client.post(url, headers=headers, json=payload)
         response.raise_for_status()
         return response.json()
+
+async def create_check_run(
+    repo: str,
+    installation_token: str,
+    head_sha: str,
+    name: str,
+    status: str = "in_progress",
+    conclusion: str | None = None,
+    output: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """
+    Create a check run for the given repository and head SHA.
+    """
+    url = f"{GITHUB_API_BASE}/repos/{repo}/check-runs"
+    headers = {
+        "Authorization": f"Bearer {installation_token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": GITHUB_API_VERSION,
+    }
+    payload: dict[str, Any] = {
+        "head_sha": head_sha,
+        "name": name,
+        "status": status,
+    }
+
+    if conclusion is not None:
+        payload["conclusion"] = conclusion
+    if output is not None:
+        payload["output"] = output
+            
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        response = await client.post(url, headers=headers, json=payload)
+        response.raise_for_status()
+        return response.json()
+
+async def update_check_run(
+    repo: str,
+    installation_token: str,
+    check_run_id: int,
+    status: str = "completed",
+    conclusion: str | None = "neutral",
+    output: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """
+    Update a check run for the given repository and check run ID.
+    """
+    url = f"{GITHUB_API_BASE}/repos/{repo}/check-runs/{check_run_id}"
+    headers = {
+        "Authorization": f"Bearer {installation_token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": GITHUB_API_VERSION,
+    }
+    payload: dict[str, Any] = {"status": status}
+    if conclusion is not None:
+        payload["conclusion"] = conclusion
+    if output is not None:
+        payload["output"] = output
+
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        response = await client.patch(url, headers=headers, json=payload)
+        response.raise_for_status()
+        return response.json()
+
+
+async def create_pr_review(
+    repo: str,
+    installation_token: str,
+    pull_number: int,
+    body: str,
+    comments: list[dict[str, Any]] | None = None,
+    event: str = "COMMENT",
+) -> dict[str, Any]:
+    """
+    Create a PR review for the given repository and pull request number.
+    Supports top-level summary body and atomic inline code comments with suggestions.
+    """
+    url = f"{GITHUB_API_BASE}/repos/{repo}/pulls/{pull_number}/reviews"
+    headers = {
+        "Authorization": f"Bearer {installation_token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": GITHUB_API_VERSION,
+    }
+    payload: dict[str, Any] = {
+        "event": event,
+        "body": body,
+    }
+    if comments:
+        payload["comments"] = comments
+
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        response = await client.post(url, headers=headers, json=payload)
+        response.raise_for_status()
+        return response.json()
+
+
+def format_review_comment(finding: ReviewSchema) -> str:
+    """Format a finding into a crisp, professional GitHub review comment."""
+    parts = [
+        f"**Issue:** {finding.title}",
+        f"**Severity:** `{finding.severity.value.upper()}`",
+        "",
+        finding.description.strip(),
+    ]
+
+    if finding.suggestion:
+        clean_code = finding.suggestion.strip()
+        # Strip redundant markdown fences if the LLM wrapped it already
+        if clean_code.startswith("```") and clean_code.endswith("```"):
+            lines = clean_code.splitlines()
+            clean_code = "\n".join(lines[1:-1]).strip()
+
+        parts.extend([
+            "",
+            "#### Suggested Fix",
+            "```suggestion",
+            clean_code,
+            "```",
+        ])
+
+    return "\n".join(parts)
+
