@@ -18,11 +18,20 @@ from diffly.github.client import (
 
 load_dotenv()
 
+import redis.exceptions
+
 VALKEY_URI = os.getenv("VALKEY_URI", "valkey://localhost:6379")
 REDIS_DSN = VALKEY_URI.replace("valkeys://", "rediss://").replace(
     "valkey://", "redis://"
 )
 REDIS_SETTING = RedisSettings.from_dsn(REDIS_DSN)
+REDIS_SETTING.retry_on_timeout = True
+REDIS_SETTING.retry_on_error = [
+    redis.exceptions.ConnectionError,
+    redis.exceptions.TimeoutError,
+]
+REDIS_SETTING.conn_retries = 10
+REDIS_SETTING.conn_retry_delay = 2
 
 
 async def review_pr(ctx: dict[str, Any], job_data: dict[str, Any]) -> dict[str, Any]:
