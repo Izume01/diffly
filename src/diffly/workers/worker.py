@@ -5,6 +5,7 @@ from arq.connections import RedisSettings
 from dotenv import load_dotenv
 
 from diffly.agents.pipeline import run_pipeline
+from diffly.guardrails import filter_diff_content, sanitize_review_output
 from diffly.github.client import (
     add_pr_reaction,
     create_check_run,
@@ -61,16 +62,33 @@ async def review_pr(ctx: dict[str, Any], job_data: dict[str, Any]) -> dict[str, 
         except Exception as e:  # noqa: BLE001
             print(f"⚠️ Failed to create check run: {e}")
 
-    # 2. Fetch unified diff
+    # 2. Fetch unified diff and apply pre-flight guardrails
     print(f"📥 Fetching diff for {repo} PR #{pull_number}...")
-    diff = await get_pr_diff(repo, pull_number, token)
-    print(f"📄 Full PR Diff retrieved ({len(diff)} characters)")
+    raw_diff = await get_pr_diff(repo, pull_number, token)
+    guard_res = filter_diff_content(raw_diff)
+    diff = guard_res.clean_diff
+    print(
+        f"📄 Diff sanitized ({len(diff)} chars, "
+        f"filtered={guard_res.filtered_files}, truncated={guard_res.was_truncated})"
+    )
 
     # 3. Run Multi-Agent Review Pipeline (Specialists + Aggregator)
     print(f"🤖 Invoking Multi-Agent Review Pipeline for {repo} PR #{pull_number}...")
     review = await run_pipeline(diff)
 
-    print(f"\n--- Executive Summary: {review.summary} ---")
+    # Sanitize executive summary against egress exfiltration
+    clean_summary = sanitize_review_output(review.summary)
+    if guard_res.filtered_files:
+        files_list = ", ".join(f"`{f}`" for f in guard_res.filtered_files)
+        clean_summary += (
+            f"\n\n> ℹ️ **Diffly Guardrails:** Filtered out non-reviewable files: {files_list}"
+        )
+    if guard_res.was_truncated:
+        clean_summary += (
+            "\n\n> ⚠️ **Diffly Guardrails:** Diff exceeded maximum line limit (1,500 lines). Deep review capped."
+        )
+
+    print(f"\n--- Executive Summary: {clean_summary} ---")
     print(f"Deduplicated findings count: {len(review.findings)}")
 
     # 4. Post GitHub PR Review with inline comments
@@ -89,7 +107,7 @@ async def review_pr(ctx: dict[str, Any], job_data: dict[str, Any]) -> dict[str, 
             repo=repo,
             installation_token=token,
             pull_number=pull_number,
-            body=f"### 🤖 Diffly Code Review\n\n{review.summary}",
+            body=f"### 🤖 Diffly Code Review\n\n{clean_summary}",
             comments=comments if comments else None,
             event="COMMENT",
         )
@@ -109,7 +127,7 @@ async def review_pr(ctx: dict[str, Any], job_data: dict[str, Any]) -> dict[str, 
                 conclusion=conclusion,
                 output={
                     "title": f"Diffly Review ({len(review.findings)} issues found)",
-                    "summary": f"### Review Overview\n\n{review.summary}",
+                    "summary": f"### Review Overview\n\n{clean_summary}",
                 },
             )
             print(f"✅ Updated check run (id={check_run_id}) to completed.")

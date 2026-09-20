@@ -212,11 +212,13 @@ async def create_pr_review(
 
 def format_review_comment(finding: ReviewSchema) -> str:
     """Format a finding into a crisp, professional GitHub review comment."""
+    from diffly.guardrails import sanitize_review_output
+
     parts = [
         f"**Issue:** {finding.title}",
         f"**Severity:** `{finding.severity.value.upper()}`",
         "",
-        finding.description.strip(),
+        sanitize_review_output(finding.description.strip()),
     ]
 
     if finding.suggestion:
@@ -225,6 +227,8 @@ def format_review_comment(finding: ReviewSchema) -> str:
         if clean_code.startswith("```") and clean_code.endswith("```"):
             lines = clean_code.splitlines()
             clean_code = "\n".join(lines[1:-1]).strip()
+
+        clean_code = sanitize_review_output(clean_code)
 
         parts.extend(
             [
