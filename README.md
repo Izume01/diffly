@@ -10,41 +10,42 @@ Diffly combines **FastAPI**, **Valkey** (Redis-compatible memory store), **Arq**
 
 ```mermaid
 flowchart TD
-    GH[GitHub PR Event] -->|Webhook POST| SMEE[Smee.io Dev Proxy]
-    SMEE -->|Forward| API[FastAPI Webhook Handler]
+    GH["GitHub PR Event"] -->|Webhook POST| SMEE["Smee.io Dev Proxy"]
+    SMEE -->|Forward| API["FastAPI Webhook Handler"]
     
-    subgraph Ingestion & Deduplication
-        API -->|HMAC-SHA256| HMAC{Valid Signature?}
-        HMAC -->|No| R401[401 Unauthorized]
-        HMAC -->|Yes| VALKEY[(Valkey Cache)]
-        VALKEY -->|SET NX EX 86400| DEDUP{Unique Delivery?}
-        DEDUP -->|Duplicate| D200[200 Duplicate Ignored]
-        DEDUP -->|Acquired| QUEUE[Enqueue Job: review_pr]
+    subgraph INGEST ["Ingestion and Deduplication"]
+        API -->|HMAC-SHA256| HMAC{"Valid Signature?"}
+        HMAC -->|No| R401["401 Unauthorized"]
+        HMAC -->|Yes| VALKEY[("Valkey Cache")]
+        VALKEY -->|SET NX EX 86400| DEDUP{"Unique Delivery?"}
+        DEDUP -->|Duplicate| D200["200 Duplicate Ignored"]
+        DEDUP -->|Acquired| QUEUE["Enqueue Job: review_pr"]
     end
 
-    subgraph Background Execution Pipeline
-        QUEUE --> WORKER[Arq Background Worker]
-        WORKER --> TOKENS[GitHub App RS256 JWT Auth]
-        WORKER --> DIFF[Fetch Pull Request Diff]
-        WORKER --> GUARD[Guardrails: Filter Lockfiles & Strip Invisible Unicode]
+    subgraph WORKFLOW ["Background Execution Pipeline"]
+        QUEUE --> WORKER["Arq Background Worker"]
+        WORKER --> TOKENS["GitHub App RS256 Auth"]
+        WORKER --> DIFF["Fetch PR Diff"]
+        DIFF --> GUARD["Guardrails: Filter Lockfiles and Unicode"]
+        GUARD --> AGENTS["Multi-Agent Review Pipeline"]
         
-        GUARD --> AGENTS[Multi-Agent Review Pipeline]
-        subgraph PydanticAI Multi-Agent Engine
-            AGENTS --> S_SEC[Security Specialist]
-            AGENTS --> S_PERF[Performance Specialist]
-            AGENTS --> S_ARCH[Architecture Specialist]
-            S_SEC & S_PERF & S_ARCH --> AGG[Judge / Aggregator Agent]
-        end
+        AGENTS --> S_SEC["Security Specialist"]
+        AGENTS --> S_PERF["Performance Specialist"]
+        AGENTS --> S_ARCH["Architecture Specialist"]
+        
+        S_SEC --> AGG["Judge / Aggregator Agent"]
+        S_PERF --> AGG
+        S_ARCH --> AGG
 
-        AGG --> SANITIZE[Egress Sanitizer: Strip Tracking Pixels & Exfiltration Beacons]
-        SANITIZE --> POST[Post Structured Review & 1-Click Code Suggestions to PR]
-        SANITIZE --> DB[(Neon Serverless PostgreSQL)]
+        AGG --> SANITIZE["Egress Sanitizer"]
+        SANITIZE --> POST["Post 1-Click Suggestions to PR"]
+        SANITIZE --> DB[("Neon Serverless PostgreSQL")]
     end
 
-    subgraph Developer Authentication & SaaS Dashboard
-        USER[Developer Browser] -->|Login with GitHub| AUTH_ROUTER[FastAPI-Users OAuth Router]
-        AUTH_ROUTER -->|JWT Bearer Token| SECURE_API[Protected API Endpoints]
-        SECURE_API -->|Query Repositories & Reviews| DB
+    subgraph AUTH ["Developer Auth and Dashboard"]
+        USER["Developer Browser"] -->|Login with GitHub| AUTH_ROUTER["FastAPI-Users OAuth Router"]
+        AUTH_ROUTER -->|JWT Bearer Token| SECURE_API["Protected API Endpoints"]
+        SECURE_API -->|Query Repositories and Reviews| DB
     end
 ```
 
