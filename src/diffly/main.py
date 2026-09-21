@@ -8,7 +8,15 @@ from arq import create_pool
 from dotenv import load_dotenv
 from fastapi import FastAPI, Header, HTTPException, Request
 
+from diffly.auth import (
+    auth_backend,
+    auth_settings,
+    fastapi_users,
+    github_oauth_client,
+)
 from diffly.database.db import init_db
+from diffly.database.schema import UserRead, UserUpdate
+from diffly.routers.repositories import router as repositories_router
 from diffly.services.valkey_client import client
 from diffly.workers.worker import REDIS_SETTING
 
@@ -25,6 +33,35 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Diffly API", lifespan=lifespan)
+
+# ---------------------------------------------------------------------------
+# Auth & User Routers (FastAPI-Users)
+# ---------------------------------------------------------------------------
+app.include_router(
+    fastapi_users.get_auth_router(auth_backend),
+    prefix="/auth/jwt",
+    tags=["auth"],
+)
+
+app.include_router(
+    fastapi_users.get_oauth_router(
+        oauth_client=github_oauth_client,
+        backend=auth_backend,
+        state_secret=auth_settings.auth_secret,
+        associate_by_email=True,
+        is_verified_by_default=True,
+    ),
+    prefix="/auth/github",
+    tags=["auth"],
+)
+
+app.include_router(
+    fastapi_users.get_users_router(UserRead, UserUpdate),
+    prefix="/users",
+    tags=["users"],
+)
+
+app.include_router(repositories_router)
 
 
 GITHUB_WEBHOOK_SECRET = os.getenv("GITHUB_WEBHOOK_SECRET", "").encode()
