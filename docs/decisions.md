@@ -17,6 +17,12 @@ This document tracks major engineering, infrastructure, and technical decisions 
 - [ADR-0009: Prompt Injection Defense & False-Positive Elimination (Precedents & Hard Exclusions)](#adr-0009-prompt-injection-defense--false-positive-elimination-precedents--hard-exclusions)
 - [ADR-0010: Fan-In Aggregator / Judge Agent & PR Review Reaction UX](#adr-0010-fan-in-aggregator--judge-agent--pr-review-reaction-ux)
 - [ADR-0011: Pre-Flight Input Sanitization & Egress Exfiltration Guardrails](#adr-0011-pre-flight-input-sanitization--egress-exfiltration-guardrails)
+- [ADR-0012: Neon Serverless Postgres Persistence via SQLModel & asyncpg](#adr-0012-neon-serverless-postgres-persistence-via-sqlmodel--asyncpg)
+- [ADR-0013: User Authentication & Management via FastAPI-Users and GitHub OAuth](#adr-0013-user-authentication--management-via-fastapi-users-and-github-oauth)
+- [ADR-0014: Database Schema Migrations via Alembic (Asyncpg & SQLModel)](#adr-0014-database-schema-migrations-via-alembic-asyncpg--sqlmodel)
+
+
+
 
 ---
 
@@ -361,4 +367,109 @@ Implement **Deterministic Pre- and Post-Flight Guardrails** in [`src/diffly/guar
   - **Tool Comparison:**
     - **Diffly:** 4/4 caught (including the SQLite connection resource leak that Sentry missed), 4 ready-to-merge 1-click ````suggestion` blocks, completed in **1m**.
     - **Sentry / Seer:** 3/4 caught (**missed the SQLite file descriptor / connection leak**), 0 code suggestions, completed in **1m**.
+
+---
+
+## ADR-0012: Neon Serverless Postgres Persistence via SQLModel & asyncpg
+
+- **Date:** 2026-09-21
+- **Status:** Accepted
+
+### Context
+Diffly reviews, findings, and token costs were initially ephemeral (logged only to stdout and GitHub PR review comments). To support audit trails, historical reviews, developer dashboards, and billing telemetry, Diffly requires durable relational persistence.
+
+### Options Considered
+1. **Prisma (Python)**: Requires spinning up an external Rust binary engine process; introduces query latency, awkward async integration, and duplicate schema definitions alongside Pydantic.
+2. **Raw `asyncpg`**: Blazing fast, but lacks schema declarations, relationship navigation, and migration scaffolding.
+3. **SQLModel + `asyncpg` on Neon Serverless Postgres**:
+   - Single unified class defines both the database table and Pydantic validation schema.
+   - Native async/await support matching FastAPI and Arq worker loops.
+   - Leverages Neon's serverless auto-scaling and built-in PgBouncer connection pooler on port 6543.
+
+### Critical Production Gotcha: Neon PgBouncer Prepared Statements
+Neon's pooled connection strings use PgBouncer in transaction pooling mode. Default `asyncpg` prepared statement caching causes collision errors (`ERROR: prepared statement "__asyncpg_stmt_1__" does not exist`) because subsequent statements execute on different backend servers. 
+- **Resolution:** Configure `create_async_engine` with `statement_cache_size=0` and `prepared_statement_cache_size=0`.
+
+### Decision
+Adopt **SQLModel + `asyncpg`** with tables organized in `src/diffly/database/`:
+- **Tables:**
+  - `Repository`: GitHub repo metadata and foreign key parent for reviews.
+  - `Review`: PR number, commit SHA, review status, executive summary, and timestamps.
+  - `ReviewFinding`: Normalized line-level defects, category, severity, and 1-click suggestion code blocks.
+  - `AICall`: Per-invocation telemetry tracking provider, model, token usage, latency_ms, and estimated cost.
+- **Connection Configuration:**
+  - `create_async_engine` with `statement_cache_size=0` and `ssl="require"`.
+  - Pooled connections managed via `async_sessionmaker` and `get_session()`.
+
+---
+
+## ADR-0013: User Authentication & Management via FastAPI-Users and GitHub OAuth
+
+- **Date:** 2026-09-21
+- **Status:** Accepted
+
+### Context
+Diffly requires user accounts and authentication to support developer dashboards, organization repository linking, custom review rules, and API/billing telemetry. Custom authentication implementations introduce severe security vulnerabilities (flawed CSRF protection, token handling bugs, and weak session lifecycle management). An established, production-grade authentication framework is needed.
+
+### Options Considered
+1. **Neon Managed Better Auth**:
+   - *Pros:* Branch-aware Postgres storage in `neon_auth` schema, zero server management.
+   - *Cons:* Designed exclusively for TypeScript/JavaScript (Next.js, React). No official Python SDK for FastAPI. Requires a separate Node/TypeScript frontend layer.
+2. **Custom / Hand-rolled GitHub OAuth Handshake**:
+   - *Pros:* Minimal initial code.
+   - *Cons:* Vulnerable to CSRF without strict state verification; high maintenance burden for session management, token refreshing, and user models.
+3. **Authlib**:
+   - *Pros:* RFC-compliant OAuth client, lightweight.
+   - *Cons:* Provides only the OAuth transport; requires building all user management, database sessions, and route dependencies manually.
+4. **FastAPI-Users (`fastapi-users[sqlalchemy]` + `httpx-oauth`)**:
+   - *Pros:* Battle-tested, modular user management for FastAPI. Native async SQLAlchemy integration compatible with Neon PostgreSQL. Out-of-the-box GitHub OAuth2 support, cookie/JWT strategies, dependency injection (`current_active_user`), and pre-built routers.
+   - *Cons:* Requires adhering to FastAPI-Users' database adapter patterns and base user models.
+
+### Decision
+Adopt **`fastapi-users`** with the **`httpx-oauth`** GitHub provider:
+- **Storage:** Persist users and linked OAuth accounts in Neon PostgreSQL via SQLAlchemy async session adapters.
+- **Provider:** GitHub OAuth2 as the primary identity provider for developers.
+- **Transport / Strategy:** JWT or secure HTTP-only cookies for session management.
+- **API Protection:** Standard FastAPI dependency injection (`Depends(current_active_user)`) for protected endpoints.
+
+---
+
+## ADR-0014: Database Schema Migrations via Alembic (Asyncpg & SQLModel)
+
+- **Date:** 2026-09-21
+- **Status:** Accepted
+
+### Context
+Initially, Diffly's database tables were created directly on server startup using `SQLModel.metadata.create_all()` and manual DDL scripts. As Diffly scales into a commercial multi-tenant SaaS with user accounts, organization memberships, custom rules, and billing, schema evolution must be version-controlled, reproducible across isolated environments (preview branches, CI/CD, and production), and reversible.
+
+### Options Considered
+1. **Startup Synchronization (`SQLModel.metadata.create_all` + ad-hoc `ALTER TABLE`)**:
+   - *Pros:* Zero configuration, creates missing tables automatically on cold-start.
+   - *Cons:* Does not handle column drops, type changes, or data transformations. Causes race conditions when multiple worker and API replicas launch concurrently.
+2. **Prisma (Python)**:
+   - *Pros:* Integrated declarative migration CLI.
+   - *Cons:* Requires an external Rust binary engine; incompatible with SQLModel and asyncpg without complex bridging.
+3. **Alembic with Asyncpg & SQLModel Metadata Discovery**:
+   - *Pros:* The battle-tested industry standard for SQLAlchemy. Generates versioned Python migration scripts with `upgrade()` and `downgrade()` methods. Detects schema diffs automatically via `--autogenerate`.
+   - *Cons:* Requires asynchronous pipeline configuration (`run_async_migrations`) and transaction-pooled connection handling.
+
+### Critical Production Gotcha: PgBouncer Statement Caching
+When running Alembic against Neon PostgreSQL's pooled endpoint (`ep-*-pooler`), PgBouncer operates in transaction pooling mode. Reusing prepared statement names across migration steps causes `ERROR: prepared statement "__asyncpg_stmt_1__" does not exist`.
+- **Resolution:** In `alembic/env.py`, configure `create_async_engine` with `statement_cache_size=0`, `prepared_statement_cache_size=0`, and `poolclass=pool.NullPool`.
+
+### Model Metadata Discovery
+Because Diffly integrates FastAPI-Users and SQLModel, both share the unified registry `SQLModel._sa_registry` defined in ADR-0013. In `alembic/env.py`:
+- `from sqlmodel import SQLModel`
+- `import diffly.database.models`
+- `target_metadata = SQLModel.metadata`
+All 6 tables (`user`, `oauth_account`, `repository`, `review`, `reviewfinding`, `aicall`) are tracked under a single unified metadata tree.
+
+### Command Workflows
+- **Generate a migration:** `uv run alembic revision --autogenerate -m "<message>"`
+- **Apply migrations:** `uv run alembic upgrade head`
+- **Roll back one revision:** `uv run alembic downgrade -1`
+- **Check drift against DB:** `uv run alembic check`
+- **View current version:** `uv run alembic current`
+
+
 
