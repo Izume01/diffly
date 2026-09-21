@@ -5,7 +5,6 @@ from arq.connections import RedisSettings
 from dotenv import load_dotenv
 
 from diffly.agents.pipeline import run_pipeline
-from diffly.guardrails import filter_diff_content, sanitize_review_output
 from diffly.github.client import (
     add_pr_reaction,
     create_check_run,
@@ -15,6 +14,7 @@ from diffly.github.client import (
     get_pr_diff,
     update_check_run,
 )
+from diffly.guardrails import filter_diff_content, sanitize_review_output
 
 load_dotenv()
 

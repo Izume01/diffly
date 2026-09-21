@@ -8,6 +8,7 @@ from arq import create_pool
 from dotenv import load_dotenv
 from fastapi import FastAPI, Header, HTTPException, Request
 
+from diffly.database.db import init_db
 from diffly.services.valkey_client import client
 from diffly.workers.worker import REDIS_SETTING
 
@@ -16,13 +17,15 @@ load_dotenv()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    await init_db()
     app.state.arq_pool = await create_pool(REDIS_SETTING)
     yield
 
     await app.state.arq_pool.aclose()
 
 
-app = FastAPI(lifespan=lifespan)
+app = FastAPI(title="Diffly API", lifespan=lifespan)
+
 
 GITHUB_WEBHOOK_SECRET = os.getenv("GITHUB_WEBHOOK_SECRET", "").encode()
 
