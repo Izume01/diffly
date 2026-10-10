@@ -36,8 +36,3 @@ class AgentReviewResult(BaseModel):
         ),
         description="List of review findings",
     )
-
-    @property
-    def finding(self) -> list[ReviewSchema]:
-        """Backward-compatibility alias for single finding access."""
-        return self.findings

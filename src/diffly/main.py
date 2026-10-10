@@ -102,8 +102,12 @@ async def github_webhook(
         "synchronize",
         "reopened",
     ):
+        repo_data = data.get("repository", {})
+        github_repo_id = repo_data.get("id")
+        repo = repo_data.get("full_name")
+        repo_name = repo_data.get("name")
+
         installation_id = data.get("installation", {}).get("id")
-        repo = data.get("repository", {}).get("full_name")
         pull_number = data.get("pull_request", {}).get("number")
         head_sha = data.get("pull_request", {}).get("head", {}).get("sha")
 
@@ -114,6 +118,8 @@ async def github_webhook(
                 "delivery": x_github_delivery,
                 "action": action,
                 "repo": repo,
+                "repo_name": repo_name,
+                "github_repo_id": github_repo_id,
                 "pull_number": pull_number,
                 "head_sha": head_sha,
                 "installation_id": installation_id,

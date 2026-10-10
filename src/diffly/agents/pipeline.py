@@ -25,7 +25,7 @@ async def run_pipeline(diff: str) -> AgentReviewResult:
             try:
                 res = await agent.run(diff)
                 results.append(res)
-                print(f"{name} Agent completed ({len(res.output.finding)} findings).")
+                print(f"{name} Agent completed ({len(res.output.findings)} findings).")
                 break
             except Exception as e:  # noqa: BLE001
                 if attempt == 0:

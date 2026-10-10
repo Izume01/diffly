@@ -21,98 +21,67 @@ GITHUB_API_VERSION = "2022-11-28"
 def get_private_key() -> str:
     """Load the RSA private key from the configured path."""
     key_file = Path(PRIVATE_KEY_PATH)
-    if not key_file.is_absolute():
-        key_file = Path.cwd() / key_file
-
     if not key_file.exists():
-        raise FileNotFoundError(f"GitHub private key not found at: {key_file}")
-
+        raise FileNotFoundError(f"GitHub private key not found at: {key_file.resolve()}")
     return key_file.read_text()
 
 
 def get_app_jwt() -> str:
-    """
-    Generate an RS256-signed JWT for GitHub App authentication.
-    Valid for 10 minutes (maximum permitted by GitHub).
-    """
+    """Generate an RS256-signed JWT for GitHub App authentication (valid for 10m)."""
     if not APP_ID:
         raise ValueError("APP_ID or GITHUB_APP_ID environment variable is missing.")
 
     private_key = get_private_key()
     now = int(time.time())
-
     payload = {
-        "iat": now - 60,  # 60s in the past to allow for clock drift
-        "exp": now + (10 * 60),  # expires in 10 minutes
+        "iat": now - 60,
+        "exp": now + 600,
         "iss": APP_ID,
     }
-
     return jwt.encode(payload, private_key, algorithm="RS256")
 
 
-async def get_installation_token(installation_id: int) -> str:
-    """
-    Exchange the App JWT for a temporary installation access token.
-    The resulting token is scoped to the installation and valid for 1 hour.
-    """
-    app_jwt = get_app_jwt()
-    url = f"{GITHUB_API_BASE}/app/installations/{installation_id}/access_tokens"
-
-    headers = {
-        "Authorization": f"Bearer {app_jwt}",
+async def _gh_request(
+    method: str,
+    path: str,
+    token: str,
+    *,
+    headers: dict[str, str] | None = None,
+    **kwargs: Any,
+) -> httpx.Response:
+    """Execute an authenticated GitHub API request with standard headers and timeout."""
+    req_headers = {
+        "Authorization": f"Bearer {token}",
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": GITHUB_API_VERSION,
     }
+    if headers:
+        req_headers.update(headers)
 
+    url = f"{GITHUB_API_BASE}{path}"
     async with httpx.AsyncClient(timeout=15.0) as client:
-        response = await client.post(url, headers=headers)
+        response = await client.request(method, url, headers=req_headers, **kwargs)
         response.raise_for_status()
-        data: dict[str, Any] = response.json()
-        return data["token"]
+        return response
+
+
+async def get_installation_token(installation_id: int) -> str:
+    """Exchange the App JWT for a temporary installation access token (valid 1 hour)."""
+    app_jwt = get_app_jwt()
+    res = await _gh_request("POST", f"/app/installations/{installation_id}/access_tokens", app_jwt)
+    data: dict[str, Any] = res.json()
+    return data["token"]
 
 
 async def get_pr_diff(repo: str, pull_number: int, installation_token: str) -> str:
-    """
-    Fetch the raw unified git diff for a pull request.
-    Example: repo='owner/repo_name', pull_number=42
-    """
-    url = f"{GITHUB_API_BASE}/repos/{repo}/pulls/{pull_number}"
-
-    headers = {
-        "Authorization": f"Bearer {installation_token}",
-        "Accept": "application/vnd.github.v3.diff",
-        "X-GitHub-Api-Version": GITHUB_API_VERSION,
-    }
-
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        response = await client.get(url, headers=headers)
-        response.raise_for_status()
-        return response.text
-
-
-async def post_pr_comment(
-    repo: str,
-    pull_number: int,
-    body: str,
-    installation_token: str,
-) -> dict[str, Any]:
-    """
-    Post a review comment to the pull request as the GitHub App bot.
-    """
-    url = f"{GITHUB_API_BASE}/repos/{repo}/issues/{pull_number}/comments"
-
-    headers = {
-        "Authorization": f"Bearer {installation_token}",
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": GITHUB_API_VERSION,
-    }
-
-    payload = {"body": body}
-
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        response = await client.post(url, headers=headers, json=payload)
-        response.raise_for_status()
-        return response.json()
+    """Fetch the raw unified git diff for a pull request."""
+    res = await _gh_request(
+        "GET",
+        f"/repos/{repo}/pulls/{pull_number}",
+        installation_token,
+        headers={"Accept": "application/vnd.github.v3.diff"},
+    )
+    return res.text
 
 
 async def create_check_run(
@@ -124,30 +93,19 @@ async def create_check_run(
     conclusion: str | None = None,
     output: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """
-    Create a check run for the given repository and head SHA.
-    """
-    url = f"{GITHUB_API_BASE}/repos/{repo}/check-runs"
-    headers = {
-        "Authorization": f"Bearer {installation_token}",
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": GITHUB_API_VERSION,
-    }
+    """Create a check run for the given repository and head SHA."""
     payload: dict[str, Any] = {
         "head_sha": head_sha,
         "name": name,
         "status": status,
     }
-
     if conclusion is not None:
         payload["conclusion"] = conclusion
     if output is not None:
         payload["output"] = output
 
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        response = await client.post(url, headers=headers, json=payload)
-        response.raise_for_status()
-        return response.json()
+    res = await _gh_request("POST", f"/repos/{repo}/check-runs", installation_token, json=payload)
+    return res.json()
 
 
 async def update_check_run(
@@ -158,25 +116,15 @@ async def update_check_run(
     conclusion: str | None = "neutral",
     output: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """
-    Update a check run for the given repository and check run ID.
-    """
-    url = f"{GITHUB_API_BASE}/repos/{repo}/check-runs/{check_run_id}"
-    headers = {
-        "Authorization": f"Bearer {installation_token}",
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": GITHUB_API_VERSION,
-    }
+    """Update a check run for the given repository and check run ID."""
     payload: dict[str, Any] = {"status": status}
     if conclusion is not None:
         payload["conclusion"] = conclusion
     if output is not None:
         payload["output"] = output
 
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        response = await client.patch(url, headers=headers, json=payload)
-        response.raise_for_status()
-        return response.json()
+    res = await _gh_request("PATCH", f"/repos/{repo}/check-runs/{check_run_id}", installation_token, json=payload)
+    return res.json()
 
 
 async def create_pr_review(
@@ -187,27 +135,13 @@ async def create_pr_review(
     comments: list[dict[str, Any]] | None = None,
     event: str = "COMMENT",
 ) -> dict[str, Any]:
-    """
-    Create a PR review for the given repository and pull request number.
-    Supports top-level summary body and atomic inline code comments with suggestions.
-    """
-    url = f"{GITHUB_API_BASE}/repos/{repo}/pulls/{pull_number}/reviews"
-    headers = {
-        "Authorization": f"Bearer {installation_token}",
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": GITHUB_API_VERSION,
-    }
-    payload: dict[str, Any] = {
-        "event": event,
-        "body": body,
-    }
+    """Create a PR review with summary body and atomic inline code comments."""
+    payload: dict[str, Any] = {"event": event, "body": body}
     if comments:
         payload["comments"] = comments
 
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        response = await client.post(url, headers=headers, json=payload)
-        response.raise_for_status()
-        return response.json()
+    res = await _gh_request("POST", f"/repos/{repo}/pulls/{pull_number}/reviews", installation_token, json=payload)
+    return res.json()
 
 
 def format_review_comment(finding: ReviewSchema) -> str:
@@ -249,18 +183,11 @@ async def add_pr_reaction(
     installation_token: str,
     reaction: str = "rocket",
 ) -> dict[str, Any]:
-    """
-    Add an emoji reaction (e.g. 'eyes', '+1', 'rocket') to the PR description.
-    Provides instant, zero-notification visual feedback that Diffly is actively reviewing.
-    """
-    url = f"{GITHUB_API_BASE}/repos/{repo}/issues/{pull_number}/reactions"
-    headers = {
-        "Authorization": f"Bearer {installation_token}",
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": GITHUB_API_VERSION,
-    }
-    payload = {"content": reaction}
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        response = await client.post(url, headers=headers, json=payload)
-        response.raise_for_status()
-        return response.json()
+    """Add an emoji reaction ('rocket', 'eyes') to PR description for instant visual UX."""
+    res = await _gh_request(
+        "POST",
+        f"/repos/{repo}/issues/{pull_number}/reactions",
+        installation_token,
+        json={"content": reaction},
+    )
+    return res.json()

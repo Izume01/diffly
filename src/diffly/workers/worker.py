@@ -3,8 +3,11 @@ from typing import Any
 
 from arq.connections import RedisSettings
 from dotenv import load_dotenv
+from sqlmodel import select
 
 from diffly.agents.pipeline import run_pipeline
+from diffly.database.db import async_session_maker
+from diffly.database.models import Repository, Review, ReviewFinding
 from diffly.github.client import (
     add_pr_reaction,
     create_check_run,
@@ -30,6 +33,7 @@ REDIS_SETTING.retry_on_error = [
     redis.exceptions.ConnectionError,
     redis.exceptions.TimeoutError,
 ]
+
 REDIS_SETTING.conn_retries = 10
 REDIS_SETTING.conn_retry_delay = 2
 
@@ -39,6 +43,8 @@ async def review_pr(ctx: dict[str, Any], job_data: dict[str, Any]) -> dict[str, 
     pull_number = job_data.get("pull_number")
     installation_id = job_data.get("installation_id")
     head_sha = job_data.get("head_sha")
+    github_repo_id = job_data.get("github_repo_id")
+    repo_name = job_data.get("repo_name")
 
     print(f"🚀 Worker picked up PR job: {job_data}")
 
@@ -50,14 +56,12 @@ async def review_pr(ctx: dict[str, Any], job_data: dict[str, Any]) -> dict[str, 
 
     token = await get_installation_token(installation_id)
 
-    # 0. Instantly react with 🚀 for zero-notification visual acknowledgement
     try:
         await add_pr_reaction(repo, pull_number, token, reaction="rocket")
         print(f"🚀 Added rocket reaction to {repo} PR #{pull_number}")
     except Exception as e:  # noqa: BLE001
         print(f"⚠️ Failed to add reaction: {e}")
 
-    # 1. Initialize Check Run (shows live spinner in PR)
     check_run_id: int | None = None
     if head_sha:
         try:
@@ -71,31 +75,24 @@ async def review_pr(ctx: dict[str, Any], job_data: dict[str, Any]) -> dict[str, 
         except Exception as e:  # noqa: BLE001
             print(f"⚠️ Failed to create check run: {e}")
 
-    # 2. Fetch unified diff and apply pre-flight guardrails
-    print(f"📥 Fetching diff for {repo} PR #{pull_number}...")
+    print(f"Fetching diff for {repo} PR #{pull_number}...")
     raw_diff = await get_pr_diff(repo, pull_number, token)
     guard_res = filter_diff_content(raw_diff)
     diff = guard_res.clean_diff
     print(
-        f"📄 Diff sanitized ({len(diff)} chars, "
+        f"Diff sanitized ({len(diff)} chars, "
         f"filtered={guard_res.filtered_files}, truncated={guard_res.was_truncated})"
     )
 
-    # 3. Run Multi-Agent Review Pipeline (Specialists + Aggregator)
-    print(f"🤖 Invoking Multi-Agent Review Pipeline for {repo} PR #{pull_number}...")
+    print(f"Invoking Multi-Agent Review Pipeline for {repo} PR #{pull_number}...")
     review = await run_pipeline(diff)
 
-    # Sanitize executive summary against egress exfiltration
     clean_summary = sanitize_review_output(review.summary)
     if guard_res.filtered_files:
         files_list = ", ".join(f"`{f}`" for f in guard_res.filtered_files)
-        clean_summary += (
-            f"\n\n> ℹ️ **Diffly Guardrails:** Filtered out non-reviewable files: {files_list}"
-        )
+        clean_summary += f"\n\n> ℹ️ **Diffly Guardrails:** Filtered out non-reviewable files: {files_list}"
     if guard_res.was_truncated:
-        clean_summary += (
-            "\n\n> ⚠️ **Diffly Guardrails:** Diff exceeded maximum line limit (1,500 lines). Deep review capped."
-        )
+        clean_summary += "\n\n> ⚠️ **Diffly Guardrails:** Diff exceeded maximum line limit (1,500 lines). Deep review capped."
 
     print(f"\n--- Executive Summary: {clean_summary} ---")
     print(f"Deduplicated findings count: {len(review.findings)}")
@@ -142,6 +139,68 @@ async def review_pr(ctx: dict[str, Any], job_data: dict[str, Any]) -> dict[str, 
             print(f"✅ Updated check run (id={check_run_id}) to completed.")
         except Exception as e:  # noqa: BLE001
             print(f"⚠️ Failed to update check run: {e}")
+
+    # 6. Persist Review and Findings to Neon Postgres
+    try:
+        async with async_session_maker() as session:
+            stmt = (
+                select(Repository).where(
+                    (Repository.github_repo_id == github_repo_id)
+                    | (Repository.full_name == repo)
+                )
+                if github_repo_id
+                else select(Repository).where(Repository.full_name == repo)
+            )
+            result = await session.exec(stmt)
+            db_repo = result.first()
+
+            if not db_repo and github_repo_id:
+                db_repo = Repository(
+                    github_repo_id=github_repo_id,
+                    name=repo_name or repo.split("/")[-1],
+                    full_name=repo,
+                )
+                session.add(db_repo)
+                await session.commit()
+                await session.refresh(db_repo)
+
+            if db_repo:
+                db_review = Review(
+                    repository_id=db_repo.id,
+                    pr_number=pull_number,
+                    commit_sha=head_sha or "",
+                    status="completed",
+                    summary=clean_summary,
+                )
+                session.add(db_review)
+                await session.commit()
+                await session.refresh(db_review)
+
+                db_findings = [
+                    ReviewFinding(
+                        review_id=db_review.id,
+                        file_path=f.file_path,
+                        line_start=f.line_number,
+                        line_end=f.line_number,
+                        severity=f.severity,
+                        category="code_review",
+                        title=f.title,
+                        description=f.description,
+                        suggestion=f.suggestion,
+                    )
+                    for f in review.findings
+                ]
+                if db_findings:
+                    session.add_all(db_findings)
+                    await session.commit()
+
+                print(
+                    f"💾 Persisted review #{db_review.id} with {len(db_findings)} findings for {repo} in database"
+                )
+            else:
+                print(f"⚠️ Could not resolve repository record for {repo}")
+    except Exception as e:  # noqa: BLE001
+        print(f"⚠️ Failed to persist review to database: {e}")
 
     return {
         "status": "completed",

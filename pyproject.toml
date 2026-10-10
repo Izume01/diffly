@@ -15,7 +15,6 @@ dependencies = [
     "fastapi-users[sqlalchemy]>=15.0.5",
     "httpx>=0.28.1",
     "httpx-oauth>=0.17.0",
-    "psycopg[binary]>=3.3.6",
     "pydantic>=2.13.5",
     "pydantic-ai>=2.43.0",
     "pydantic-ai-harness>=0.31.0",

@@ -400,6 +400,9 @@ Adopt **SQLModel + `asyncpg`** with tables organized in `src/diffly/database/`:
 - **Connection Configuration:**
   - `create_async_engine` with `statement_cache_size=0` and `ssl="require"`.
   - Pooled connections managed via `async_sessionmaker` and `get_session()`.
+- **Worker Persistence Pipeline (Integrated 2026-10-10):**
+  - Webhooks forward `github_repo_id` and `repo_name` within the Arq job payload.
+  - The Arq worker upserts `Repository` entities upon job execution, persisting completed `Review` records and normalized line-level `ReviewFinding` items directly into Neon PostgreSQL via `async_session_maker`.
 
 ---
 
